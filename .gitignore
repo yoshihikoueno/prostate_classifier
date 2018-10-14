@@ -1,0 +1,4 @@
+data/*
+script/*
+CNN_for_cancer_classification/*
+__pycache__/*
