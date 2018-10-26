@@ -3,7 +3,65 @@ This module contains some utilities for PDF/TXT analysis.
 """
 import random
 import regex
+import tensorflow as tf
 import os
+
+def get_raw(path_annotation, keyword='cancer_cases'):
+    """
+    this function will convert string path
+    to annotated images to non-annotated images.
+    note that should be a directory with name specified
+    by keyword parameter. And that directory must have
+    exactly the same directory structures and names inside
+    as train or eval directory.
+
+    Args:
+        path_annotation: string path to
+            annotated images
+        keyword: (optional) the name of directory which
+            contains images for non-annotated images
+            
+    Returns:
+        string path to non-annotated images
+    """
+    if not isinstance(path_annotation, str):
+        path_annotation = path_annotation.decode()
+
+    path_non_annotated = regex.sub(r'(train/eval)', 'cancer_cases')
+    # making sure that there is a difference
+    assert path_non_annotated != path_annotation
+    return path_non_annotated
+
+def tf_get_raw(path_annotation):
+    """
+    wrapper function for tensorflow
+    """
+    return tf.py_func(
+        get_raw, [path_annotation], [tf.string]
+    )
+
+def tf_determine_image_size(image):
+    '''
+    normally, tf doesn't know the size of
+    images and it causes various problems
+    sometimes. this developers can use 
+    this function to determine them.
+    '''
+    return tf.image.resize_image_with_crop_or_pad(image, tf.shape(image)[0], tf.shape(image)[1]),
+
+def tf_extract_label(image, label_value):
+    """
+    this function extracts label image
+    from given image which contains
+    background and label on it.
+    Args:
+        image: input image, must be 1 channel
+        label_value: pixel value of label
+    Returns:
+        image that contains only image
+    """
+    label_image = tf.cast(tf.equal(image, label_value), image.dtype)
+    return label_image
 
 def config_to_file_name(config):
     """
