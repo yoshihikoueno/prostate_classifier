@@ -20,41 +20,68 @@ eval_dir = "data/eval"
 model_dir = "summary"
 
 
-def get_estimator(model_fn, model_dir=model_dir, save_interval=100, params=None):
+def get_estimator(model_module, model_dir=model_dir, save_interval=100, params=None):
     """
     this function returns Estimator
     Args:
         model_dir: (str) directory where chechpoints and summaries will be saved
     """
+    model_fn = model_module.model_fn
+    default_params = model_module.default_params
+
     config_session = tf.ConfigProto(
         inter_op_parallelism_threads=tio.FLAGS.cores,
         intra_op_parallelism_threads=tio.FLAGS.cores,
+        allow_soft_placement=True,
         gpu_options=tf.GPUOptions(allow_growth=True)
     )
     config = tf.estimator.RunConfig(
+        train_distribute=tf.contrib.distribute.MirroredStrategy(num_gpus=tio.FLAGS.gpus),
         save_checkpoints_steps=save_interval,
         save_summary_steps=save_interval,
         session_config=config_session,
     )
+    if params is not None and not util.config_validator(params, default_params):
+        print("WARGING: params are not valid. descarding...")
+        params = None
+
+    if params is None:
+        params_temp = util.get_config_from_modeldir(model_dir)
+        if params_temp is not None:
+            print("INFO: config file found")
+        if util.config_validator(params_temp, default_params):
+            print("INFO: params in config file confirmed to be valid")
+            params = params_temp
+        else:
+            print("INFO: params in config file is not valid. Ignored that config.")
+
+    if params is not None and util.list_isin("batch_size", list(params.keys())):
+        tio.FLAGS.batch_size = params['batch_size']
+
     return tf.estimator.Estimator(
         model_fn=model_fn, model_dir=model_dir, config=config, params=params
     )
 
 
-def train(steps=3000):
+def train(model_module, mode, steps=3000):
     """
     this function trains the model.
     Args:
+        model_module: model module that contains
+                model_fn and default_params
         steps: the num of steps to train
+        mode: specify a mode 'classification' or 'annotation'
+    Return:
+        return value from evaluation of the model
     """
-    estimator = get_estimator()
+    estimator = get_estimator(model_module)
     eval_res, export_res = tf.estimator.train_and_evaluate(
         estimator=estimator,
         train_spec=tf.estimator.TrainSpec(
-            input_fn=lambda: tio.input_func_train(train_dir), max_steps=steps
+            input_fn=lambda: tio.input_func_train(train_dir, mode=mode), max_steps=steps
         ),
         eval_spec=tf.estimator.EvalSpec(
-            input_fn=lambda: tio.input_func_test(eval_dir), throttle_secs=0
+            input_fn=lambda: tio.input_func_test(eval_dir, mode=mode), throttle_secs=0
         ),
     )
     if eval_res is None:
@@ -65,12 +92,14 @@ def train(steps=3000):
     return eval_res
 
 
-def hyperparameter_optimize(output="hyper_opt_res", max_steps=10000, n_calls=1000):
+def hyperparameter_optimize(model_module, mode, output="hyper_opt_res", max_steps=10000, n_calls=1000):
     """
     this function will perform hyperperameter optimization
     to the model and save the result to "output" file
 
     Args:
+        model_module: model module
+        mode: specify a mode 'classification' or 'annotation'
         output: the output directory where to save the results
         max_steps: the max steps for each trial
         n_calls: the max num for trials
@@ -95,6 +124,7 @@ def hyperparameter_optimize(output="hyper_opt_res", max_steps=10000, n_calls=100
         print()
 
         estimator = get_estimator(
+            model_module,
             model_dir=output + util.config_to_file_name(params),
             save_interval=500,
             params=params,
@@ -111,12 +141,12 @@ def hyperparameter_optimize(output="hyper_opt_res", max_steps=10000, n_calls=100
             eval_res, export_res = tf.estimator.train_and_evaluate(
                 estimator=estimator,
                 train_spec=tf.estimator.TrainSpec(
-                    input_fn=lambda: tio.input_func_train(train_dir),
+                    input_fn=lambda: tio.input_func_train(train_dir, mode=mode),
                     max_steps=max_steps,
                     hooks=[early_stop],
                 ),
                 eval_spec=tf.estimator.EvalSpec(
-                    input_fn=lambda: tio.input_func_test(eval_dir),
+                    input_fn=lambda: tio.input_func_test(eval_dir, mode=mode),
                     throttle_secs=0,
                 ),
             )
@@ -149,10 +179,14 @@ def hyperparameter_optimize(output="hyper_opt_res", max_steps=10000, n_calls=100
     return res
 
 
-def predict(image):
+def predict(model_module, image):
     """
     this function classify a cancer
+    Args:
+        model_module: model module
+        mode: specify a mode 'classification' or 'annotation'
+        image: input image
     """
-    classifier = get_estimator()
+    classifier = get_estimator(model_module)
     result = classifier.predict(input_fn=lambda: tio.input_func_predict(image))
     return result
