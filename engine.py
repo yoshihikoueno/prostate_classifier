@@ -41,6 +41,7 @@ def get_estimator(model_module, model_dir=model_dir, save_interval=100, params=N
         save_checkpoints_steps=save_interval,
         save_summary_steps=save_interval,
         session_config=config_session,
+        model_dir=model_dir,
     )
     if params is not None and not util.config_validator(params, default_params):
         print("WARGING: params are not valid. descarding...")
@@ -60,7 +61,7 @@ def get_estimator(model_module, model_dir=model_dir, save_interval=100, params=N
         tio.FLAGS.batch_size = params['batch_size']
 
     return tf.estimator.Estimator(
-        model_fn=model_fn, model_dir=model_dir, config=config, params=params
+        model_fn=model_fn, config=config, params=params
     )
 
 

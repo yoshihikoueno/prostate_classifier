@@ -20,7 +20,7 @@ default_params = {
     "unet_rate":2,
 }
 
-def model_fn(features, labels, mode, params):
+def model_fn(features, labels, mode, params, config):
     """
     this function is a model_fn for tensorflow
     """
@@ -131,11 +131,13 @@ def model_fn(features, labels, mode, params):
     tf.summary.image("label_int", labels_int*255)
 
     summary_op = tf.summary.merge_all()
-    summary_saver_hook = tf.summary.summary_saver_hook()
+    summary_saver_hook = tf.train.SummarySaverHook(save_steps=config.save_summary_steps, output_dir=config.model_dir, summary_op=summary_op)
+    # Estimators will save summaries while training session but not in eval or predict,
+    #  so saver hook above is useful for eval and predict
 
     # Configure the Prediction Op (for PREDICT mode)
     if mode == tf.estimator.ModeKeys.PREDICT:
-        return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
+        return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions, prediction_hooks=[summary_saver_hook])
 
     # Configure the Training Op (for TRAIN mode)
     if mode == tf.estimator.ModeKeys.TRAIN:
@@ -151,5 +153,5 @@ def model_fn(features, labels, mode, params):
         )
     }
     return tf.estimator.EstimatorSpec(
-        mode=mode, loss=loss, eval_metric_ops=eval_metric_ops, evaluation_hooks=[]
+        mode=mode, loss=loss, eval_metric_ops=eval_metric_ops, evaluation_hooks=[summary_saver_hook]
     )
