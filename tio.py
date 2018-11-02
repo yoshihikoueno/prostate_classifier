@@ -29,12 +29,16 @@ def input_func_train(data_dir, mode):
         print("Unexpected mode specified in tio.input_func_train: {}".format(mode))
 
     dataset = augment_ds(dataset)
+    # TODO: change the augmentation behavior
+    # it could be better to generate one data from one data
+
     dataset = normalize(dataset)
     dataset = determine_channel_size(dataset)
 
     if mode == "annotation":
         dataset = divide_channels(dataset)
 
+    dataset = dataset.shuffle(FLAGS.shuffle_buffer_size)
     dataset = dataset.batch(FLAGS.batch_size)
     dataset = dataset.prefetch(FLAGS.prefetch)
     dataset = dataset.repeat(None)

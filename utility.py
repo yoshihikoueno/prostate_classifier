@@ -7,6 +7,16 @@ import tensorflow as tf
 from tensorflow.python.client import device_lib
 import os
 
+def tf_threshold(input_tensor, threshold, max_val, dtype=tf.int64):
+    '''
+    this function will performs thresholding operation
+    for input tensor. elements with larger or equal to
+    threshold will be max_val otherwise 0
+    '''
+    output = tf.cast(tf.greater_equal(input_tensor, threshold), dtype)*max_val
+    output = tf.cast(output, dtype)
+    return output
+
 def get_available_gpus():
     local_device_protos = device_lib.list_local_devices()
     return [x.name for x in local_device_protos if x.device_type == 'GPU']

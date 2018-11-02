@@ -108,48 +108,48 @@ def model_fn(features, labels, mode, params):
     seg = tf.layers.conv2d(inputs=unet_out, filters=1, kernel_size=1, activation=None)
 
     predictions = {
-        "prediction": seg,
+        "prediction": tf.sigmoid(seg),
     }
 
     seg_size = tf.cast(seg.get_shape()[1], tf.int32)
 
-    # crop labes
+    # crop labes and features
+    # assuming they have the same sizes
     label_size = tf.cast(labels.get_shape()[1], tf.int32)
     diff_half = tf.cast(( label_size-seg_size )/2, tf.int32)
     labels = tf.image.crop_to_bounding_box(labels, diff_half, diff_half, seg_size, seg_size)
-
-    # crop features
-    feature_size = tf.cast(features.get_shape()[1], tf.int32)
-    diff_half = tf.cast(( feature_size-seg_size )/2, tf.int32)
     features_cropped = tf.image.crop_to_bounding_box(features, diff_half, diff_half, seg_size, seg_size)
 
-    loss = tf.losses.mean_squared_error(labels, seg)
+    labels_int = tf.cast(tf.greater_equal(labels, 0.5), tf.int64)
+    loss = tf.losses.sigmoid_cross_entropy(labels_int, logits=seg)
 
     tf.summary.image("input", features_cropped)
-    tf.summary.image("seg", seg)
+    tf.summary.image("seg_raw", seg)
+    tf.summary.image("seg_sigmoid", predictions['prediction'])
+    tf.summary.image("seg_int", tf.cast(tf.greater_equal(predictions['prediction'], 0.5), tf.int64)*255 )
     tf.summary.image("label", labels)
+    tf.summary.image("label_int", labels_int*255)
+
+    summary_op = tf.summary.merge_all()
+    summary_saver_hook = tf.summary.summary_saver_hook()
 
     # Configure the Prediction Op (for PREDICT mode)
     if mode == tf.estimator.ModeKeys.PREDICT:
-        tf.summary.merge_all()
         return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
 
     # Configure the Training Op (for TRAIN mode)
     if mode == tf.estimator.ModeKeys.TRAIN:
-        tf.summary.merge_all()
         optimizer = tf.train.AdamOptimizer()
         train_op = optimizer.minimize(
             loss=loss, global_step=tf.train.get_global_step())
         return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op, training_hooks=[])
 
     # Add evaluation metrics (for EVAL mode)
-    tf.summary.image("ground_truth", labels)
-    tf.summary.merge_all()
     eval_metric_ops = {
         "accuracy": tf.metrics.accuracy(
             labels=labels, predictions=predictions["prediction"]
         )
     }
     return tf.estimator.EstimatorSpec(
-        mode=mode, loss=loss, eval_metric_ops=eval_metric_ops
+        mode=mode, loss=loss, eval_metric_ops=eval_metric_ops, evaluation_hooks=[]
     )
