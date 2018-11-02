@@ -120,23 +120,25 @@ def model_fn(features, labels, mode, params, config):
     labels = tf.image.crop_to_bounding_box(labels, diff_half, diff_half, seg_size, seg_size)
     features_cropped = tf.image.crop_to_bounding_box(features, diff_half, diff_half, seg_size, seg_size)
 
-    labels_int = tf.cast(tf.greater_equal(labels, 0.5), tf.int64)
+    labels_int = util.tf_threshold(labels, 0.5, 1, tf.uint8)
     loss = tf.losses.sigmoid_cross_entropy(labels_int, logits=seg)
 
     tf.summary.image("input", features_cropped)
     tf.summary.image("seg_raw", seg)
     tf.summary.image("seg_sigmoid", predictions['prediction'])
-    tf.summary.image("seg_int", tf.cast(tf.greater_equal(predictions['prediction'], 0.5), tf.int64)*255 )
+    tf.summary.image("seg_int", util.tf_threshold(predictions['prediction'], 0.5, 255, tf.uint8))
     tf.summary.image("label", labels)
     tf.summary.image("label_int", labels_int*255)
 
-    summary_op = tf.summary.merge_all()
-    summary_saver_hook = tf.train.SummarySaverHook(save_steps=config.save_summary_steps, output_dir=config.model_dir, summary_op=summary_op)
-    # Estimators will save summaries while training session but not in eval or predict,
-    #  so saver hook above is useful for eval and predict
 
     # Configure the Prediction Op (for PREDICT mode)
     if mode == tf.estimator.ModeKeys.PREDICT:
+        summary_saver_hook = tf.train.SummarySaverHook(
+            save_steps=config.save_summary_steps,
+            output_dir=config.model_dir+'predict' if config.model_dir[-1]=='/' else '/predict',
+            summary_op=tf.summary.merge_all())
+        # Estimators will save summaries while training session but not in eval or predict,
+        #  so saver hook above is useful for eval and predict
         return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions, prediction_hooks=[summary_saver_hook])
 
     # Configure the Training Op (for TRAIN mode)
@@ -147,6 +149,12 @@ def model_fn(features, labels, mode, params, config):
         return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op, training_hooks=[])
 
     # Add evaluation metrics (for EVAL mode)
+    summary_saver_hook = tf.train.SummarySaverHook(
+        save_steps=config.save_summary_steps,
+        output_dir=config.model_dir+'eval' if config.model_dir[-1]=='/' else '/eval',
+        summary_op=tf.summary.merge_all())
+    # Estimators will save summaries while training session but not in eval or predict,
+    #  so saver hook above is useful for eval and predict
     eval_metric_ops = {
         "accuracy": tf.metrics.accuracy(
             labels=labels, predictions=predictions["prediction"]

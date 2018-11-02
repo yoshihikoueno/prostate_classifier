@@ -37,7 +37,6 @@ def get_estimator(model_module, model_dir=model_dir, save_interval=100, params=N
     )
     config = tf.estimator.RunConfig(
         train_distribute=tf.contrib.distribute.MirroredStrategy(num_gpus=tio.FLAGS.gpus),
-        eval_distribute=tf.contrib.distribute.MirroredStrategy(num_gpus=tio.FLAGS.gpus),
         save_checkpoints_steps=save_interval,
         save_summary_steps=save_interval,
         session_config=config_session,
