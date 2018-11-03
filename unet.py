@@ -135,7 +135,7 @@ def model_fn(features, labels, mode, params, config):
     if mode == tf.estimator.ModeKeys.PREDICT:
         summary_saver_hook = tf.train.SummarySaverHook(
             save_steps=config.save_summary_steps,
-            output_dir=config.model_dir+'predict' if config.model_dir[-1]=='/' else '/predict',
+            output_dir=config.model_dir+'predict' if config.model_dir[-1]=='/' else config.model_dir+'/predict',
             summary_op=tf.summary.merge_all())
         # Estimators will save summaries while training session but not in eval or predict,
         #  so saver hook above is useful for eval and predict
@@ -151,7 +151,7 @@ def model_fn(features, labels, mode, params, config):
     # Add evaluation metrics (for EVAL mode)
     summary_saver_hook = tf.train.SummarySaverHook(
         save_steps=config.save_summary_steps,
-        output_dir=config.model_dir+'eval' if config.model_dir[-1]=='/' else '/eval',
+        output_dir=config.model_dir+'eval' if config.model_dir[-1]=='/' else config.model_dir+'/eval',
         summary_op=tf.summary.merge_all())
     # Estimators will save summaries while training session but not in eval or predict,
     #  so saver hook above is useful for eval and predict
