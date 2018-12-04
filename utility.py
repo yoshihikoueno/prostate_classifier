@@ -144,13 +144,14 @@ def tf_determine_image_channel(image, channel_size):
     Args:
         image: input image
         channel_size: channel size
-            specify 1 for black_white images,
-            3 for colored images,
-            and 4 for images with alpha channel
+            3 for 3 channel image
+            1 for mono-chromatic image
+            other for custom images
     Return:
         image with channel size determined
     '''
-    new_shape = [None] * len(image.shape)
+    new_shape = list(image.get_shape())
+
     new_shape[-1] = channel_size
     image.set_shape(new_shape)
     return image

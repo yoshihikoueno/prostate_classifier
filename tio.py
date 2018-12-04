@@ -6,34 +6,47 @@ This module is a utility module named "tio" which
 
 import sys
 import os
-import random
 import multiprocessing
 import regex
 import tensorflow as tf
 import utility as util
 
+def _print_error(message, func_name):
+    '''
+    this function will print out error
+    message
+    '''
+    print('{} in {}'.format(message, func_name))
+    return
 
 def input_func_train(data_dir, mode):
     """
     Args:
         data_dir: directory that stores data
-        mode: either "classification" or "annotation"
+        mode: either "classification", "annotation", or "both"
     Returns:
         tf.Dataset
     """
+    mode_error_msg = "Unexpected mode specified"
+
     if mode == "classification":
         dataset = create_simple_ds_for_classification(data_dir)
     elif mode == "annotation":
         dataset = create_simple_ds_for_annotation(data_dir)
+    elif mode == "both":
+        dataset = create_simple_ds_for_both(data_dir)
     else:
-        print("Unexpected mode specified in tio.input_func_train: {}".format(mode))
+        _print_error(mode_error_msg, sys._getframe().f_code.co_name)
+
+    if mode == "classification":
+        dataset = determine_channel_size(dataset, 1)
+    elif mode == "annotation":
+        dataset = determine_channel_size(dataset, 2)
+    else:
+        _print_error(mode_error_msg, sys._getframe().f_code.co_name)
 
     dataset = augment_ds(dataset)
-    # TODO: change the augmentation behavior
-    # it could be better to generate one data from one data
-
     dataset = normalize(dataset)
-    dataset = determine_channel_size(dataset)
 
     if mode == "annotation":
         dataset = divide_channels(dataset)
@@ -44,7 +57,8 @@ def input_func_train(data_dir, mode):
     dataset = dataset.repeat(None)
     return dataset
 
-def determine_channel_size(dataset, channel_size=2):
+
+def determine_channel_size(dataset, channel_size):
     '''
     this function will determines
     the channel size in the given dataset
@@ -53,11 +67,12 @@ def determine_channel_size(dataset, channel_size=2):
     feature image and label image are concatenated
     '''
     dataset = dataset.map(
-        lambda image,*extra:(
+        lambda image, *extra: (
             util.tf_determine_image_channel(image, channel_size), *extra
         ) if extra else util.tf_determine_image_channel(image, channel_size),
         FLAGS.cores,)
     return dataset
+
 
 def divide_channels(dataset):
     """
@@ -73,7 +88,8 @@ def divide_channels(dataset):
             images
     """
     dataset = dataset.map(
-        lambda raw_annotation: (raw_annotation[:, :, 0:1], raw_annotation[:, :, 1:]),
+        lambda raw_annotation: (
+            raw_annotation[:, :, 0:1], raw_annotation[:, :, 1:]),
         FLAGS.cores,)
     return dataset
 
@@ -94,6 +110,9 @@ def normalize(dataset):
 def create_simple_ds_for_annotation(data_dir, label_value=(255, 0, 0)):
     """
     this function creates simple ds for segmentation
+
+    Returns:
+        dataset = (image, patient_id, img_id)
     """
     data_dir = data_dir if data_dir[-1] == "/" else data_dir + "/"
 
@@ -107,52 +126,117 @@ def create_simple_ds_for_annotation(data_dir, label_value=(255, 0, 0)):
 
     # prepare the paths
     dataset = dataset.map(
-        lambda path_annotation: (util.tf_get_raw(
-            path_annotation), path_annotation),
+        lambda path_annotation: (
+            util.tf_get_raw(path_annotation),
+            tf_get_patient_img_from_path(path_annotation)),
         num_parallel_calls=FLAGS.cores,)
+    # now dataset = (path_raw, path_anno, patient_id, image_id)
 
     # existence check
-    dataset = dataset.map(
-        lambda raw, annotated: (
-            raw, annotated, util.tf_exists([raw, annotated])),
-        num_parallel_calls=FLAGS.cores,)
-    dataset = dataset.filter(lambda raw, annotated, exists: exists)
-    dataset = dataset.map(
-        lambda raw, annotated, exists: (raw, annotated),
-        num_parallel_calls=FLAGS.cores,)
+    dataset = dataset.filter(lambda raw, annotated, *others: util.tf_exists([raw, annotated]))
 
     # load and decode
     dataset = dataset.map(
-        lambda raw, annotated: (tf.image.decode_image(tf.read_file(
-            raw)), tf.image.decode_image(tf.read_file(annotated))),
+        lambda raw, annotated, *others: (
+            tf.image.decode_image(tf.read_file(raw)),
+            tf.image.decode_image(tf.read_file(annotated)),
+            *others,
+        ),
         num_parallel_calls=FLAGS.cores,)
 
     # change the colorscale and extract labels
     dataset = dataset.map(
-        lambda raw, annotated: (tf.image.rgb_to_grayscale(
-            raw), util.tf_extract_label(annotated, label_value)),
+        lambda raw, annotated, *others: (
+            tf.image.rgb_to_grayscale(raw),
+            util.tf_extract_label(annotated, label_value),
+            *others
+        ),
         num_parallel_calls=FLAGS.cores,)
 
     # determine the size of the image
     dataset = dataset.map(
-        lambda raw, annotation: (util.tf_determine_image_size(
-            raw), util.tf_determine_image_size(annotation)),
+        lambda raw, annotation, *others: (
+            util.tf_determine_image_size(raw),
+            util.tf_determine_image_size(annotation),
+            *others,
+        ),
         num_parallel_calls=FLAGS.cores,)
 
     # crop
     dataset = dataset.map(
-        lambda raw, annotation: (
-            tf.image.resize_images(
-                raw, [FLAGS.init_image_size, FLAGS.init_image_size]),
-            tf.image.resize_images(annotation, [FLAGS.init_image_size, FLAGS.init_image_size])),
+        lambda raw, annotation, *others: (
+            tf.image.resize_images(raw, [FLAGS.init_image_size, FLAGS.init_image_size]),
+            tf.image.resize_images(annotation, [FLAGS.init_image_size, FLAGS.init_image_size]),
+            *others,
+        ),
         num_parallel_calls=FLAGS.cores,)
 
     # combine
     dataset = dataset.map(
-        lambda raw, annotation: tf.concat([raw, annotation], 2)
-    )
+        lambda raw, annotation, *others: (
+            tf.concat([raw, annotation], 2),
+            *others,
+        ))
+    # now dataset = (img_raw_annotation, patient_id, image_id)
+
+    # dictionalize
+    dataset = dataset.map(
+        lambda combined_img, patient_id, img_id: {
+            'image': combined_img,
+            'patient_id': patient_id,
+            'img_id': img_id,
+        })
     return dataset
 
+def query_group(patient_id, data_dir='./data'):
+    '''
+    this func tries to figure out the cancer class
+    for given patient id
+    '''
+    group_dir = '{}/RAW/cancer_cases_grouped'.format(data_dir)
+    if isinstance(patient_id, int):
+        patient_id = str(patient_id)
+
+    for group in os.listdir(group_dir):
+        if patient_id in os.listdir('{}/{}'.format(group_dir, group)):
+            group_int = int(regex.sub(r'.*(\d+).*', r'\1', group))
+            return group_int
+    print('Error: failed to retrieve group for patient_id: {}'.format(patient_id))
+    return -1
+
+def create_simple_ds_for_both(data_dir, label_value=(255, 0, 0)):
+    '''
+    this function creates dataset that contatins
+    (Raw MRI, Cancer Annotation, Cancer Stage Class)
+    '''
+    dataset = create_simple_ds_for_annotation(data_dir, label_value)
+    dataset = dataset.map(
+        lambda dictionary:
+    )
+    pass
+
+def lambda_for_dict(src_dst_lambda, target_dir):
+    '''
+    this func provides lambda functionatily
+    which is especially useful when you
+    want to apply some operation on
+    the list of dictionaries, where
+    you maybe want to apply some operation
+    on just a part of the dictionary and
+    want others to be the same.
+    Args:
+        arg_lambda: list of arg and lambda
+            arg must be an element of keys
+            arg_lambda = [(key0, lambda0), ...]
+    '''
+    if isinstance(arg_lambdas[0], str):
+        src, dst, operation = arg_lambdas
+        target_dir[arg] = operation(target_dir[arg])
+        return target_dir
+    else:
+        for arg, operation in arg_lambdas:
+            target_dir[arg] = operation(target_dir[arg])
+        return target_dir
 
 def create_simple_ds_for_classification(data_dir):
     """
@@ -161,6 +245,10 @@ def create_simple_ds_for_classification(data_dir):
     and "create_simple_ds_for_annotation" cannot be
     merged together due to the difference in directory
     structures.
+
+    Returns:
+        Dataset consits of dicts
+        each dict has key[image, group, patient_id, img_id]
     """
     data_dir = data_dir if data_dir[-1] == "/" else data_dir + "/"
 
@@ -173,25 +261,21 @@ def create_simple_ds_for_classification(data_dir):
 
     dataset = dataset.map(tf_get_group_patient_img_from_path, FLAGS.cores)
     dataset = dataset.map(
-        lambda image, group, patient_id, img_id: (
-            tf.image.decode_image(tf.read_file(image)),
-            group,  # Group Number
-        ),
+        lambda image, group, patient_id, img_id: {
+            'image': tf.image.decode_image(tf.read_file(image)),
+            'group': group,  # Group Number
+            'patient_id': patient_id,
+            'img_id': img_id,
+        },
         FLAGS.cores,
     )
     dataset = dataset.map(
-        lambda image, group: (
-            tf.image.rgb_to_grayscale(util.tf_determine_image_size(image)),
-            group,  # Group Number
-        ),
-        FLAGS.cores,
-    )
-    dataset = dataset.map(
-        lambda image, group: (
-            tf.image.resize_images(
-                image, [FLAGS.init_image_size, FLAGS.init_image_size]),
-            group,
-        ),
+        lambda dictionary: lambda_for_dict((
+            'image',
+            lambda image: tf.resize_images(
+                tf.image.rgb_to_grayscale(util.tf_determine_image_size(image)),
+                [FLAGS.init_image_size] * 2,
+            ))),
         FLAGS.cores,
     )
     return dataset
@@ -284,52 +368,84 @@ def augment_ds(ds):
         """
         performs augmentation to given image
         """
-        images = [image] + [
-            tf.image.random_contrast(image, 0.5, 1.5) for i in range(10)
-        ]
-        return images
+        image = tf.image.random_contrast(image, 0.5, 1.5)
+        image = tf.image.random_flip_left_right(image)
+        image = tf.image.random_brightness(image, 0.5)
+        return image
 
     def augment_dynamic(image):
         """
         performs augmentation by cropping/resizing
         given image
         """
-        images = [
-            tf.image.resize_images(
-                tf.image.crop_to_bounding_box(
-                    image,
-                    offset_height=tf.div(
-                        FLAGS.init_image_size
-                        - FLAGS.intermediate_image_size
-                        + random.randrange(-10, 10),
-                        2,
-                    ),
-                    offset_width=tf.div(
-                        FLAGS.init_image_size
-                        - FLAGS.intermediate_image_size
-                        + random.randrange(-10, 10),
-                        2,
-                    ),
-                    target_height=FLAGS.intermediate_image_size
-                    + random.randrange(-10, 10),
-                    target_width=FLAGS.intermediate_image_size
-                    + random.randrange(-10, 10),
+        image = tf.image.resize_images(
+            tf.image.crop_to_bounding_box(
+                image,
+                offset_height=tf.div(
+                    FLAGS.init_image_size
+                    - FLAGS.intermediate_image_size
+                    + tf.random_uniform([], -10, 10, dtype=tf.int64),
+                    2,
                 ),
-                [FLAGS.final_image_size] * 2,
-            )
-            for i in range(20)
-        ]
-        return images
+                offset_width=tf.div(
+                    FLAGS.init_image_size
+                    - FLAGS.intermediate_image_size
+                    + tf.random_uniform([], -10, 10, dtype=tf.int64),
+                    2,
+                ),
+                target_height=FLAGS.intermediate_image_size
+                + tf.random_uniform([], -10, 10, dtype=tf.int64),
+                target_width=FLAGS.intermediate_image_size
+                + tf.random_uniform([], -10, 10, dtype=tf.int64),
+            ),
+            [FLAGS.final_image_size] * 2,
+        )
+        return image
 
-    def augment_for_list(augment_func, data_list):
+    def augment_warp(image, n_points=10, width_index=0, height_index=1, threshold=5, default=0.0):
         '''
-        this function will perform augmentation
-        for each image in data_list
+        this function will perfom data augmentation
+        using Non-affine transformation, namely
+        image warping.
+        Currently, only square images are supported
+
+        Args:
+            image: input image
+            n_points: the num of points to take for image warping
+            width_index: index of width, set this to 1 if batched 0 otherwise normally
+            height_index: index of height
+            threshold: threshold to judge random value inappropriate
+                diff values with its abs heigher width/threshold will be judged inappropriate
+            default: value to be used when random value is over threshold
+        Return:
+            warped image
         '''
-        result = list()
-        for data in data_list:
-            result += augment_func(data)
-        return result
+        width = int(image.get_shape()[width_index])
+        height = int(image.get_shape()[height_index])
+        assert width == height
+
+        default = tf.cast(default, tf.float32)
+
+        raw = tf.random_uniform([1, n_points, 2], 0.0, tf.cast(width, tf.float32), dtype=tf.float32)
+        diff = tf.random_normal([1, n_points, 2], mean=0.0, dtype=tf.float32)
+        # ensure that diff is not too big
+        diff = default*tf.cast(tf.greater(tf.abs(diff), width/threshold), tf.float32) + \
+            diff*tf.cast(tf.less_equal(tf.abs(diff), width/threshold), tf.float32)
+
+        # expand dimension to meet the requirement of sparse_image_warp
+        image = tf.expand_dims(image, 0)
+
+        image = tf.contrib.image.sparse_image_warp(
+            image=image,
+            source_control_point_locations=raw,
+            dest_control_point_locations=raw+diff,
+        )[0]
+        # sparse_image_warp function will return a tuple
+        # (warped image, flow_field)
+
+        # shrink dimension
+        image = image[0,:,:,:]
+        return image
 
     def fused_augmentation(image, label, augment_func):
         '''
@@ -344,30 +460,25 @@ def augment_ds(ds):
         Return:
             Tuple(list of images, list of labels)
         '''
-        images = [image]
         if isinstance(augment_func, list) or isinstance(augment_func, tuple):
             for func in augment_func:
-                images = augment_for_list(func, images)
+                image = func(image)
         else:
             images = augment_func(image)
 
         # for some cases, like annotation, we don't need
         #  label data
         if label is None:
-            return images
+            return image
 
-        labels = len(images) * [label]
-        return (images, labels)
+        return (image, label)
 
-    ds = ds.apply(
-        tf.data.experimental.parallel_interleave(
-            lambda image, *extra: tf.data.Dataset.from_tensor_slices(
-                fused_augmentation(image, extra[0], [augment_dynamic, augment_static])
-            ) if extra else tf.data.Dataset.from_tensor_slices(
-                fused_augmentation(image, None, [augment_dynamic, augment_static])),
-            cycle_length=FLAGS.cores,
-            sloppy=True,
-        )
+    ds = ds.map(
+        lambda image, *
+        extra: fused_augmentation(
+            image, extra[0], [augment_dynamic, augment_static])
+        if extra else fused_augmentation(image, None, [augment_dynamic, augment_static, augment_warp]),
+        num_parallel_calls=FLAGS.cores,
     )
     return ds
 
@@ -454,7 +565,10 @@ def input_func_test(data_dir, mode):
      base function for generating dataset.
     Args:
         doc_name: a file name for a document or a tfrecord file (must end with ".tfrecords")
-        mode: mode 'annotation' or 'classification'
+        mode: mode 'annotation', 'classification', or 'both'
+            annotation: raw MRI and annotation
+            classification: raw MIR and label
+            both: raw MRI and annotation and label
     Returns:
         tf.Dataset
             touple(dict, label)
@@ -463,12 +577,19 @@ def input_func_test(data_dir, mode):
         dataset = create_simple_ds_for_classification(data_dir)
     elif mode == "annotation":
         dataset = create_simple_ds_for_annotation(data_dir)
+    elif mode == 'both':
+        dataset = create_simple_ds_for_both(data_dir)
     else:
         print("Unexpected mode specified in tio.input_func_train: {}".format(mode))
 
     dataset = resize_image(dataset)
     dataset = normalize(dataset)
-    dataset = determine_channel_size(dataset)
+    if mode == "classification":
+        dataset = determine_channel_size(dataset, 1)
+    elif mode == "annotation":
+        dataset = determine_channel_size(dataset, 2)
+    else:
+        _print_error(mode_error_msg, sys._getframe().f_code.co_name)
     if mode == "annotation":
         dataset = divide_channels(dataset)
 
@@ -572,11 +693,11 @@ def generate_tf_record(path, ds, parse_fn=None):
 class FLAGS:
     cores = multiprocessing.cpu_count()
     prefetch = 1
-    batch_size = 30
+    batch_size = 2
     init_image_size = 512
     intermediate_image_size = 180
     final_image_size = intermediate_image_size
-    shuffle_buffer_size = 100 * batch_size
+    shuffle_buffer_size = 50 * batch_size
 
     gpus = len(util.get_available_gpus())
     if gpus != 0:
