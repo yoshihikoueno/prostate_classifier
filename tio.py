@@ -128,7 +128,7 @@ def create_simple_ds_for_annotation(data_dir, label_value=(255, 0, 0)):
     dataset = dataset.map(
         lambda path_annotation: (
             util.tf_get_raw(path_annotation),
-            tf_get_patient_img_from_path(path_annotation)),
+            *tf_get_patient_img_from_path(path_annotation)),
         num_parallel_calls=FLAGS.cores,)
     # now dataset = (path_raw, path_anno, patient_id, image_id)
 
@@ -193,16 +193,26 @@ def query_group(patient_id, data_dir='./data'):
     this func tries to figure out the cancer class
     for given patient id
     '''
-    group_dir = '{}/RAW/cancer_cases_grouped'.format(data_dir)
-    if isinstance(patient_id, int):
-        patient_id = str(patient_id)
+    def __query(patient_id, data_dir):
+        '''
+        actual function
+        needs to be wrapped
+        '''
+        if isinstance(data_dir, bytes):
+            data_dir = data_dir.decode()
+        if isinstance(patient_id, bytes):
+            patient_id = patient_id.decode()
+        group_dir = '{}/RAW/cancer_cases_grouped'.format(data_dir)
+        if not isinstance(patient_id, str):
+            patient_id = str(patient_id)
 
-    for group in os.listdir(group_dir):
-        if patient_id in os.listdir('{}/{}'.format(group_dir, group)):
-            group_int = int(regex.sub(r'.*(\d+).*', r'\1', group))
-            return group_int
-    print('Error: failed to retrieve group for patient_id: {}'.format(patient_id))
-    return -1
+        for group in os.listdir(group_dir):
+            if patient_id in os.listdir('{}/{}'.format(group_dir, group)):
+                group_int = int(regex.sub(r'.*(\d+).*', r'\1', group))
+                return group_int
+        print('Error: failed to retrieve group for patient_id: {}'.format(patient_id))
+        return -1
+    return tf.py_func(__query, [patient_id, data_dir], tf.int64)
 
 def create_simple_ds_for_both(data_dir, label_value=(255, 0, 0)):
     '''
@@ -211,11 +221,12 @@ def create_simple_ds_for_both(data_dir, label_value=(255, 0, 0)):
     '''
     dataset = create_simple_ds_for_annotation(data_dir, label_value)
     dataset = dataset.map(
-        lambda dictionary:
+        lambda dictionary: lambda_for_dict(('patient_id', 'group', query_group), dictionary)
     )
-    pass
+    dataset = dataset.filter(lambda dictionary: tf.not_equal(dictionary['group'], -1))
+    return dataset
 
-def lambda_for_dict(src_dst_lambda, target_dir):
+def lambda_for_dict(src_dst_lambdas, target_dict):
     '''
     this func provides lambda functionatily
     which is especially useful when you
@@ -229,14 +240,14 @@ def lambda_for_dict(src_dst_lambda, target_dir):
             arg must be an element of keys
             arg_lambda = [(key0, lambda0), ...]
     '''
-    if isinstance(arg_lambdas[0], str):
-        src, dst, operation = arg_lambdas
-        target_dir[arg] = operation(target_dir[arg])
-        return target_dir
+    if isinstance(src_dst_lambdas[0], str):
+        src, dst, operation = src_dst_lambdas
+        target_dict[dst] = operation(target_dict[src])
+        return target_dict
     else:
-        for arg, operation in arg_lambdas:
-            target_dir[arg] = operation(target_dir[arg])
-        return target_dir
+        for src, dst, operation in src_dst_lambdas:
+            target_dict[dst] = operation(target_dict[src])
+        return target_dict
 
 def create_simple_ds_for_classification(data_dir):
     """
@@ -272,6 +283,7 @@ def create_simple_ds_for_classification(data_dir):
     dataset = dataset.map(
         lambda dictionary: lambda_for_dict((
             'image',
+            'image',
             lambda image: tf.resize_images(
                 tf.image.rgb_to_grayscale(util.tf_determine_image_size(image)),
                 [FLAGS.init_image_size] * 2,
@@ -292,7 +304,7 @@ def tf_get_group_patient_img_from_path(path):
 def tf_get_patient_img_from_path(path):
     """wrapper func"""
     return tf.py_func(
-        get_group_patient_img_from_path, [
+        get_patient_img_from_path, [
             path], [tf.string, tf.int64, tf.int64]
     )
 
@@ -351,7 +363,7 @@ def get_patient_img_from_path(path):
         r"^.*/(\d+)/(\d+)\.(jpg|jpeg|png|bmp)", r"\1", path
     )
     img_id = regex.sub(
-        r"^.*/Group(\d)/(\d+)/(\d+)\.(jpg|jpeg|png|bmp)", r"\3", path)
+        r"^.*/(\d+)/(\d+)\.(jpg|jpeg|png|bmp)", r"\2", path)
 
     patient_id, img_id = list(map(int, [patient_id, img_id]))
 
@@ -693,7 +705,7 @@ def generate_tf_record(path, ds, parse_fn=None):
 class FLAGS:
     cores = multiprocessing.cpu_count()
     prefetch = 1
-    batch_size = 2
+    batch_size = 30
     init_image_size = 512
     intermediate_image_size = 180
     final_image_size = intermediate_image_size
