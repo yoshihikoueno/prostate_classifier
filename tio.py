@@ -206,6 +206,8 @@ def query_group(patient_id, data_dir='./data'):
         if not isinstance(patient_id, str):
             patient_id = str(patient_id)
 
+        if patient_id in os.listdir('{}/RAW/healthy_cases'.format(data_dir)):
+            return 0
         for group in os.listdir(group_dir):
             if patient_id in os.listdir('{}/{}'.format(group_dir, group)):
                 group_int = int(regex.sub(r'.*(\d+).*', r'\1', group))
