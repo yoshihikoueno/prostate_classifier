@@ -11,6 +11,7 @@ import regex
 import tensorflow as tf
 import utility as util
 
+
 def _print_error(message, func_name):
     '''
     this function will print out error
@@ -19,14 +20,13 @@ def _print_error(message, func_name):
     print('{} in {}'.format(message, func_name))
     return
 
-def input_func_train(data_dir, mode):
-    """
-    Args:
-        data_dir: directory that stores data
-        mode: either "classification", "annotation", or "both"
-    Returns:
-        tf.Dataset
-    """
+
+def create_simple_ds(data_dir, mode):
+    '''
+    this func will create simplest dataset
+    which doesnt contain data augmentation or
+    shuffling, etc...
+    '''
     mode_error_msg = "Unexpected mode specified"
 
     if mode == "classification":
@@ -37,20 +37,94 @@ def input_func_train(data_dir, mode):
         dataset = create_simple_ds_for_both(data_dir)
     else:
         _print_error(mode_error_msg, sys._getframe().f_code.co_name)
+        raise RuntimeError
+    # at this point, dataset = dictionary
+    return dataset
 
+
+def determine_channel_size_on_mode(dataset, mode):
+    '''
+    this function will determine the channel size
+    contained in ds depending on mode
+    '''
+    mode_error_msg = "Unexpected mode specified"
     if mode == "classification":
         dataset = determine_channel_size(dataset, 1)
-    elif mode == "annotation":
+    elif mode == "annotation" or mode == 'both':
         dataset = determine_channel_size(dataset, 2)
     else:
         _print_error(mode_error_msg, sys._getframe().f_code.co_name)
+        raise RuntimeError
+    return dataset
 
+
+def extract_from_dict(dict_in, keys_to_extract, remove):
+    '''
+    this function will extract elements from
+    dict 'dict_in' and create new dict containing them
+    '''
+    assert isinstance(remove, bool)
+
+    dict_out = dict()
+    keys_to_extract = set(keys_to_extract)
+
+    for key in keys_to_extract:
+        dict_out[key] = dict_in[key]
+        if remove:
+            del dict_in[key]
+    return dict_out
+
+
+def separate_feature_label(dataset, mode):
+    '''
+    this func will separate features and labels
+    in datasets
+    '''
+    mode_error_msg = "Unexpected mode specified"
+    if mode == "classification":
+        dataset = dataset.map(
+            lambda dictionary: (
+                dictionary,
+                extract_from_dict(dictionary, ['group'], True)
+            )
+        )
+    elif mode == "annotation":
+        dataset = dataset.map(
+            lambda dictionary: (
+                dictionary,
+                extract_from_dict(dictionary, ['annotation'], True)
+            )
+        )
+    elif mode == "both":
+        dataset = dataset.map(
+            lambda dictionary: (
+                dictionary,
+                extract_from_dict(dictionary, ['annotation', 'group'], True)
+            )
+        )
+    else:
+        _print_error(mode_error_msg, sys._getframe().f_code.co_name)
+        raise RuntimeError
+    return dataset
+
+
+def input_func_train(data_dir, mode):
+    """
+    Args:
+        data_dir: directory that stores data
+        mode: either "classification", "annotation", or "both"
+    Returns:
+        tf.Dataset = tuple(featuers<dict>, label)
+    """
+    dataset = create_simple_ds(data_dir, mode)
+    dataset = determine_channel_size_on_mode(dataset, mode)
     dataset = augment_ds(dataset)
     dataset = normalize(dataset)
-
-    if mode == "annotation":
+    if mode == "annotation" or mode == 'both':
         dataset = divide_channels(dataset)
+        # 'image' in dict will be divided into 'raw' 'annotation'
 
+    dataset = separate_feature_label(dataset, mode)
     dataset = dataset.shuffle(FLAGS.shuffle_buffer_size)
     dataset = dataset.batch(FLAGS.batch_size)
     dataset = dataset.prefetch(FLAGS.prefetch)
@@ -67,9 +141,13 @@ def determine_channel_size(dataset, channel_size):
     feature image and label image are concatenated
     '''
     dataset = dataset.map(
-        lambda image, *extra: (
-            util.tf_determine_image_channel(image, channel_size), *extra
-        ) if extra else util.tf_determine_image_channel(image, channel_size),
+        lambda dictionary: lambda_for_dict(
+            (
+                'image', 'image',
+                lambda image: util.tf_determine_image_channel(
+                    image, channel_size)
+            ), dictionary
+        ),
         FLAGS.cores,)
     return dataset
 
@@ -84,13 +162,26 @@ def divide_channels(dataset):
     Args:
         dataset: dataset consists of images with 2 channel
     Returns:
-        dataset: tuple(features, labels), both are 1 channel
-            images
+        dataset: dataset containing dict, which has 'raw' and 'annotation'
+            as keys
     """
     dataset = dataset.map(
-        lambda raw_annotation: (
-            raw_annotation[:, :, 0:1], raw_annotation[:, :, 1:]),
-        FLAGS.cores,)
+        lambda dictionary: lambda_for_dict(
+            (
+                ['image', 'raw', lambda raw_annotation: raw_annotation[:, :, :1]],
+                ['image', 'annotation', lambda raw_annotation: raw_annotation[:, :, 1:]],
+            ),
+            dictionary),
+        FLAGS.cores,
+    )
+    dataset = dataset.map(
+        lambda dictionary: lambda_for_dict(
+            (
+                ['image', None, None],  # delete image
+            ),
+            dictionary),
+        FLAGS.cores,
+    )
     return dataset
 
 
@@ -100,8 +191,13 @@ def normalize(dataset):
     [0,255] -> [0,1]
     """
     dataset = dataset.map(
-        lambda image, *extra: (tf.div(tf.cast(image, tf.float32), 255.0),
-                               *extra) if extra else tf.div(tf.cast(image, tf.float32), 255.0),
+        lambda dictionary: lambda_for_dict(
+            (
+                'image', 'image',
+                lambda image: tf.div(tf.cast(image, tf.float32), 255.0),
+            ),
+            dictionary,
+        ),
         FLAGS.cores,
     )
     return dataset
@@ -133,7 +229,8 @@ def create_simple_ds_for_annotation(data_dir, label_value=(255, 0, 0)):
     # now dataset = (path_raw, path_anno, patient_id, image_id)
 
     # existence check
-    dataset = dataset.filter(lambda raw, annotated, *others: util.tf_exists([raw, annotated]))
+    dataset = dataset.filter(lambda raw, annotated,
+                             *others: util.tf_exists([raw, annotated]))
 
     # load and decode
     dataset = dataset.map(
@@ -165,8 +262,10 @@ def create_simple_ds_for_annotation(data_dir, label_value=(255, 0, 0)):
     # crop
     dataset = dataset.map(
         lambda raw, annotation, *others: (
-            tf.image.resize_images(raw, [FLAGS.init_image_size, FLAGS.init_image_size]),
-            tf.image.resize_images(annotation, [FLAGS.init_image_size, FLAGS.init_image_size]),
+            tf.image.resize_images(
+                raw, [FLAGS.init_image_size, FLAGS.init_image_size]),
+            tf.image.resize_images(
+                annotation, [FLAGS.init_image_size, FLAGS.init_image_size]),
             *others,
         ),
         num_parallel_calls=FLAGS.cores,)
@@ -187,6 +286,7 @@ def create_simple_ds_for_annotation(data_dir, label_value=(255, 0, 0)):
             'img_id': img_id,
         })
     return dataset
+
 
 def query_group(patient_id, data_dir='./data'):
     '''
@@ -216,6 +316,7 @@ def query_group(patient_id, data_dir='./data'):
         return -1
     return tf.py_func(__query, [patient_id, data_dir], tf.int64)
 
+
 def create_simple_ds_for_both(data_dir, label_value=(255, 0, 0)):
     '''
     this function creates dataset that contatins
@@ -223,10 +324,13 @@ def create_simple_ds_for_both(data_dir, label_value=(255, 0, 0)):
     '''
     dataset = create_simple_ds_for_annotation(data_dir, label_value)
     dataset = dataset.map(
-        lambda dictionary: lambda_for_dict(('patient_id', 'group', query_group), dictionary)
+        lambda dictionary: lambda_for_dict(
+            ('patient_id', 'group', query_group), dictionary)
     )
-    dataset = dataset.filter(lambda dictionary: tf.not_equal(dictionary['group'], -1))
+    dataset = dataset.filter(
+        lambda dictionary: tf.not_equal(dictionary['group'], -1))
     return dataset
+
 
 def lambda_for_dict(src_dst_lambdas, target_dict):
     '''
@@ -238,18 +342,32 @@ def lambda_for_dict(src_dst_lambdas, target_dict):
     on just a part of the dictionary and
     want others to be the same.
     Args:
-        arg_lambda: list of arg and lambda
-            arg must be an element of keys
-            arg_lambda = [(key0, lambda0), ...]
+        src_dst_lambdas_lambda: list of source, destination and lambda
+            source and destination must be elements of keys
+
+            E.g.
+            src_dst_lambdas_lambda = [(key0src, key0dst, lambda0), ...]
+             -> d[key0dst] = lambda0(d[key0src])
+
+            if destination is None, src will be removed
     '''
-    if isinstance(src_dst_lambdas[0], str):
-        src, dst, operation = src_dst_lambdas
-        target_dict[dst] = operation(target_dict[src])
-        return target_dict
-    else:
-        for src, dst, operation in src_dst_lambdas:
+    def lambda_for_dict_single(src, dst, operation, target_dict):
+        if dst is None:
+            if src in target_dict.keys():
+                del target_dict[src]
+        else:
             target_dict[dst] = operation(target_dict[src])
         return target_dict
+
+    if isinstance(src_dst_lambdas[0], str):
+        src, dst, operation = src_dst_lambdas
+        return lambda_for_dict_single(src, dst, operation, target_dict)
+    else:
+        for src, dst, operation in src_dst_lambdas:
+            target_dict = lambda_for_dict_single(
+                src, dst, operation, target_dict)
+        return target_dict
+
 
 def create_simple_ds_for_classification(data_dir):
     """
@@ -440,11 +558,13 @@ def augment_ds(ds):
 
         default = tf.cast(default, tf.float32)
 
-        raw = tf.random_uniform([1, n_points, 2], 0.0, tf.cast(width, tf.float32), dtype=tf.float32)
+        raw = tf.random_uniform([1, n_points, 2], 0.0, tf.cast(
+            width, tf.float32), dtype=tf.float32)
         diff = tf.random_normal([1, n_points, 2], mean=0.0, dtype=tf.float32)
         # ensure that diff is not too big
         diff = default*tf.cast(tf.greater(tf.abs(diff), width/threshold), tf.float32) + \
-            diff*tf.cast(tf.less_equal(tf.abs(diff), width/threshold), tf.float32)
+            diff*tf.cast(tf.less_equal(tf.abs(diff),
+                                       width/threshold), tf.float32)
 
         # expand dimension to meet the requirement of sparse_image_warp
         image = tf.expand_dims(image, 0)
@@ -458,42 +578,57 @@ def augment_ds(ds):
         # (warped image, flow_field)
 
         # shrink dimension
-        image = image[0,:,:,:]
+        image = image[0, :, :, :]
         return image
 
-    def fused_augmentation(image, label, augment_func):
+    def fused_augmentation(image, augment_func):
         '''
-        this function is a fuse function that allows
-        to pass both data and label
+        This func will perform data augmentation
+        for images using functions supecified by
+        augment_func
+
         Returned values are supposed to be sliced
+
+        Note:
+            initially, this func was implemented
+            to return bunch of images
+            that is augmentated,
+            but we found that it is not good way
+            to do the augmentation because
+            similar data will be located close
+            to each other and it will not sufficiently
+            shuffled because the augmentation size
+            is much more larger than shuffle buffer size.
+
+            We finally found that the augmentation
+            operation should receive one image and
+            return one image that is changed a bit.
+            In this way, we have various images
+            through many epochs.
 
         Args:
             image: image data
-            label: label data
             augment_func: function(s) used to augment
         Return:
-            Tuple(list of images, list of labels)
+            image
         '''
         if isinstance(augment_func, list) or isinstance(augment_func, tuple):
             for func in augment_func:
                 image = func(image)
         else:
-            images = augment_func(image)
-
-        # for some cases, like annotation, we don't need
-        #  label data
-        if label is None:
-            return image
-
-        return (image, label)
+            image = augment_func(image)
+        return image
 
     ds = ds.map(
-        lambda image, *
-        extra: fused_augmentation(
-            image, extra[0], [augment_dynamic, augment_static])
-        if extra else fused_augmentation(image, None, [augment_dynamic, augment_static, augment_warp]),
-        num_parallel_calls=FLAGS.cores,
-    )
+        lambda dictionary: lambda_for_dict(
+            (
+                'image', 'image',
+                lambda image: fused_augmentation(
+                    image, [augment_dynamic, augment_static])
+            ),
+            dictionary
+        ),
+        num_parallel_calls=FLAGS.cores,)
     return ds
 
 
@@ -502,30 +637,19 @@ def resize_image(ds):
     make images smaller so that they can be handled by DNN
     """
     ds = ds.map(
-        lambda image, *extra: (
-            tf.image.resize_images(
-                tf.image.crop_to_bounding_box(
-                    image,
-                    offset_height=tf.div(
-                        FLAGS.init_image_size - FLAGS.intermediate_image_size, 2),
-                    offset_width=tf.div(
-                        FLAGS.init_image_size - FLAGS.intermediate_image_size, 2),
-                    target_height=FLAGS.intermediate_image_size,
-                    target_width=FLAGS.intermediate_image_size,
-                ),
-                [FLAGS.final_image_size] * 2,
-            ),
-            group,
-        ) if extra else tf.image.resize_images(
-            tf.image.crop_to_bounding_box(
-                image,
-                offset_height=tf.div(
-                    FLAGS.init_image_size - FLAGS.intermediate_image_size, 2),
-                offset_width=tf.div(
-                    FLAGS.init_image_size - FLAGS.intermediate_image_size, 2),
-                target_height=FLAGS.intermediate_image_size,
-                target_width=FLAGS.intermediate_image_size,),
-            [FLAGS.final_image_size] * 2,),
+        lambda dictionary: lambda_for_dict(
+            ('image', 'image',
+             lambda image: tf.image.resize_images(
+                 tf.image.crop_to_bounding_box(
+                     image,
+                     offset_height=tf.div(FLAGS.init_image_size - FLAGS.intermediate_image_size, 2),
+                     offset_width=tf.div(FLAGS.init_image_size - FLAGS.intermediate_image_size, 2),
+                     target_height=FLAGS.intermediate_image_size,
+                     target_width=FLAGS.intermediate_image_size,
+                 ), [FLAGS.final_image_size] * 2,)
+             ),
+            dictionary
+        ),
         FLAGS.cores,
     )
     return ds
@@ -587,26 +711,15 @@ def input_func_test(data_dir, mode):
         tf.Dataset
             touple(dict, label)
     """
-    if mode == "classification":
-        dataset = create_simple_ds_for_classification(data_dir)
-    elif mode == "annotation":
-        dataset = create_simple_ds_for_annotation(data_dir)
-    elif mode == 'both':
-        dataset = create_simple_ds_for_both(data_dir)
-    else:
-        print("Unexpected mode specified in tio.input_func_train: {}".format(mode))
-
+    dataset = create_simple_ds(data_dir, mode)
+    dataset = determine_channel_size_on_mode(dataset, mode)
     dataset = resize_image(dataset)
     dataset = normalize(dataset)
-    if mode == "classification":
-        dataset = determine_channel_size(dataset, 1)
-    elif mode == "annotation":
-        dataset = determine_channel_size(dataset, 2)
-    else:
-        _print_error(mode_error_msg, sys._getframe().f_code.co_name)
-    if mode == "annotation":
+    if mode == "annotation" or mode == 'both':
         dataset = divide_channels(dataset)
+        # 'image' in dict will be divided into 'raw' 'annotation'
 
+    dataset = separate_feature_label(dataset, mode)
     dataset = dataset.batch(FLAGS.batch_size)
     dataset = dataset.prefetch(FLAGS.prefetch)
     return dataset
@@ -706,7 +819,7 @@ def generate_tf_record(path, ds, parse_fn=None):
 
 class FLAGS:
     cores = multiprocessing.cpu_count()
-    prefetch = 1
+    prefetch = None
     batch_size = 30
     init_image_size = 512
     intermediate_image_size = 180
