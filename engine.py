@@ -79,15 +79,15 @@ def train(model_module, mode, steps=3000):
     eval_res, export_res = tf.estimator.train_and_evaluate(
         estimator=estimator,
         train_spec=tf.estimator.TrainSpec(
-            input_fn=lambda: tio.input_func_train(train_dir, mode=mode), max_steps=steps
+            input_fn=lambda: tio.input_func_train(train_dir, mode=mode, no_healthy=True), max_steps=steps
         ),
         eval_spec=tf.estimator.EvalSpec(
-            input_fn=lambda: tio.input_func_test(eval_dir, mode=mode), throttle_secs=0
+            input_fn=lambda: tio.input_func_test(eval_dir, mode=mode, no_healthy=True), throttle_secs=0
         ),
     )
     if eval_res is None:
         eval_res = estimator.evaluate(
-            input_fn=lambda: tio.input_func_test(eval_dir)
+            input_fn=lambda: tio.input_func_test(eval_dir, True)
         )
     print(eval_res)
     return eval_res

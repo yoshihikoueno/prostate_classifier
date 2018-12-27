@@ -41,6 +41,23 @@ def create_simple_ds(data_dir, mode):
     # at this point, dataset = dictionary
     return dataset
 
+def filter_out_healthy(dataset):
+    '''
+    this function will filter out healthy cases from
+    given dataset.
+    this func assumes that dataset has key 'group'
+    and 'group = 0' indicates healthy
+    '''
+    dataset = dataset.filter(
+        lambda dictionary: tf.not_equal(dictionary['group'], 0)
+    )
+    dataset = dataset.map(
+        lambda dictionary: lambda_for_dict(
+            ('group', 'group', lambda x: x - 1),
+            dictionary,
+        )
+    )
+    return dataset
 
 def determine_channel_size_on_mode(dataset, mode):
     '''
@@ -108,11 +125,13 @@ def separate_feature_label(dataset, mode):
     return dataset
 
 
-def input_func_train(data_dir, mode):
+def input_func_train(data_dir, mode, no_healthy=False):
     """
     Args:
         data_dir: directory that stores data
         mode: either "classification", "annotation", or "both"
+        no_healthy: whether or not this func should remove
+            healthy cases from data
     Returns:
         tf.Dataset = tuple(featuers<dict>, label)
     """
@@ -123,6 +142,8 @@ def input_func_train(data_dir, mode):
     if mode == "annotation" or mode == 'both':
         dataset = divide_channels(dataset)
         # 'image' in dict will be divided into 'raw' 'annotation'
+    if no_healthy:
+        dataset = filter_out_healthy(dataset)
 
     dataset = separate_feature_label(dataset, mode)
     dataset = dataset.shuffle(FLAGS.shuffle_buffer_size)
@@ -696,7 +717,7 @@ def is_tfrecord(doc_name):
     return False
 
 
-def input_func_test(data_dir, mode):
+def input_func_test(data_dir, mode, no_healthy=False):
     """
     this function generates dataset for tensorflow Estimators
      leveraging dataset_from_doc function which is supposed to be
@@ -707,6 +728,8 @@ def input_func_test(data_dir, mode):
             annotation: raw MRI and annotation
             classification: raw MIR and label
             both: raw MRI and annotation and label
+        no_healthy: whether this func should remove all the healthy cases
+            from data or not
     Returns:
         tf.Dataset
             touple(dict, label)
@@ -718,6 +741,8 @@ def input_func_test(data_dir, mode):
     if mode == "annotation" or mode == 'both':
         dataset = divide_channels(dataset)
         # 'image' in dict will be divided into 'raw' 'annotation'
+    if no_healthy:
+        dataset = filter_out_healthy(dataset)
 
     dataset = separate_feature_label(dataset, mode)
     dataset = dataset.batch(FLAGS.batch_size)
