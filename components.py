@@ -104,3 +104,4 @@ def unet_based_annotator(input_, n_filters_first, n_downsample, rate, kernel_siz
     '''
     unet_out = unet(input_, n_filters_first, n_downsample, rate, kernel_size, conv_stride, trainable)
     seg = tf.layers.conv2d(inputs=unet_out, filters=1, kernel_size=1, activation=None, trainable=trainable)
+    return seg
