@@ -10,8 +10,8 @@ import tio
 import skopt
 import utility as util
 import logging
-from unet import unet
-from unet import encoder as cnn
+from components import unet_based_annotator as annotator
+from components import encoder as cnn
 logging.getLogger().setLevel(logging.INFO)
 
 default_params = {
@@ -34,12 +34,11 @@ def model_fn(features, labels, mode, params, config):
     if not params.keys():
         params = default_params
 
-    unet_out = unet(features['raw'], params["unet_filters_first"], params["unet_n_downsample"],
-                    params["unet_rate"], params["kernel_size"], params["conv_stride"])
+    seg = annotator(features['raw'], params["unet_filters_first"], params["unet_n_downsample"],
+                    params["unet_rate"], params["kernel_size"], params["conv_stride"], False)
 
-    _, cnn_out = cnn(unet_out, params['cnn_filters_first'], params['cnn_n_downsample'],
-                     params['cnn_rate'], params['kernel_size'], params['conv_stride'])
-    seg = tf.layers.conv2d(inputs=unet_out, filters=1, kernel_size=1, activation=None)
+    _, cnn_out = cnn(seg, params['cnn_filters_first'], params['cnn_n_downsample'],
+                     params['cnn_rate'], params['kernel_size'], params['conv_stride'], True)
 
     flat_cnn_out = tf.layers.flatten(cnn_out)
     logits = tf.layers.dense(flat_cnn_out, 5, tf.nn.relu)
@@ -67,7 +66,7 @@ def model_fn(features, labels, mode, params, config):
     labels_int = util.tf_threshold(labels['annotation'], 0.5, 1, tf.uint8)
     loss_seg = tf.losses.sigmoid_cross_entropy(labels_int, logits=seg)
     loss_group = tf.losses.sparse_softmax_cross_entropy(labels['group'], logits)
-    loss = loss_seg + loss_group
+    loss = loss_group
 
     tf.summary.image("input", features_cropped)
     tf.summary.image("seg_sigmoid", predictions['annotation'])

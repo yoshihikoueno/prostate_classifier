@@ -64,7 +64,7 @@ def get_estimator(model_module, model_dir=model_dir, save_interval=100, params=N
     )
 
 
-def train(model_module, mode, steps=3000):
+def train(model_module, mode, steps=3000, no_healthy=False, model_dir=None):
     """
     this function trains the model.
     Args:
@@ -75,14 +75,14 @@ def train(model_module, mode, steps=3000):
     Return:
         return value from evaluation of the model
     """
-    estimator = get_estimator(model_module)
+    estimator = get_estimator(model_module, model_dir=model_dir)
     eval_res, export_res = tf.estimator.train_and_evaluate(
         estimator=estimator,
         train_spec=tf.estimator.TrainSpec(
-            input_fn=lambda: tio.input_func_train(train_dir, mode=mode, no_healthy=True), max_steps=steps
+            input_fn=lambda: tio.input_func_train(train_dir, mode=mode, no_healthy=no_healthy), max_steps=steps
         ),
         eval_spec=tf.estimator.EvalSpec(
-            input_fn=lambda: tio.input_func_test(eval_dir, mode=mode, no_healthy=True), throttle_secs=0
+            input_fn=lambda: tio.input_func_test(eval_dir, mode=mode, no_healthy=no_healthy), throttle_secs=0
         ),
     )
     if eval_res is None:

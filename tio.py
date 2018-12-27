@@ -849,7 +849,7 @@ class FLAGS:
     init_image_size = 512
     intermediate_image_size = 180
     final_image_size = intermediate_image_size
-    shuffle_buffer_size = 50 * batch_size
+    shuffle_buffer_size = 10 * batch_size
 
     gpus = len(util.get_available_gpus())
     if gpus != 0:
