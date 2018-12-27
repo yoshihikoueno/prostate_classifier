@@ -98,7 +98,7 @@ def unet(inputs, filters_first, n_downsample, rate, kernel_size, conv_stride, tr
     assert not res_list
     return output
 
-def unet_based_annotator(input_, n_filter_first, n_downsample, rate, kernel_size, conv_stride, trainable):
+def unet_based_annotator(input_, n_filters_first, n_downsample, rate, kernel_size, conv_stride, trainable):
     '''
     this function represents a part of model which will produce annotation or segmentation
     '''
