@@ -79,7 +79,7 @@ def model_fn(features, labels, mode, params, config):
     #  so saver hook above is useful for eval and predict
     eval_metric_ops = {
         "accuracy": tf.metrics.accuracy(
-            labels=labels['group'], predictions=predictions["group"]
+            labels=labels['annotation'], predictions=predictions["annotation"]
         )
     }
     return tf.estimator.EstimatorSpec(

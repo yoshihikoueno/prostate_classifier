@@ -20,7 +20,7 @@ eval_dir = "data/eval"
 model_dir = "summary"
 
 
-def get_estimator(model_module, model_dir=model_dir, save_interval=100, params=None):
+def get_estimator(model_module, model_dir=model_dir, save_interval=100, params=None, warm_start_setting=None):
     """
     this function returns Estimator
     Args:
@@ -41,6 +41,7 @@ def get_estimator(model_module, model_dir=model_dir, save_interval=100, params=N
         save_summary_steps=save_interval,
         session_config=config_session,
         model_dir=model_dir,
+        keep_checkpoint_max=20,
     )
     if params is not None and not util.config_validator(params, default_params):
         print("WARGING: params are not valid. descarding...")
@@ -60,11 +61,11 @@ def get_estimator(model_module, model_dir=model_dir, save_interval=100, params=N
         tio.FLAGS.batch_size = params['batch_size']
 
     return tf.estimator.Estimator(
-        model_fn=model_fn, config=config, params=params
+        model_fn=model_fn, config=config, params=params, warm_start_from=warm_start_setting
     )
 
 
-def train(model_module, mode, steps=3000, no_healthy=False, model_dir=None):
+def train(model_module, mode, steps=3000, no_healthy=False, model_dir=None, warm_start_setting=None):
     """
     this function trains the model.
     Args:
@@ -75,7 +76,7 @@ def train(model_module, mode, steps=3000, no_healthy=False, model_dir=None):
     Return:
         return value from evaluation of the model
     """
-    estimator = get_estimator(model_module, model_dir=model_dir)
+    estimator = get_estimator(model_module, model_dir=model_dir, warm_start_setting=warm_start_setting)
     eval_res, export_res = tf.estimator.train_and_evaluate(
         estimator=estimator,
         train_spec=tf.estimator.TrainSpec(
@@ -121,8 +122,7 @@ def hyperparameter_optimize(model_module, mode, output="hyper_opt_res", max_step
         }
 
         print("Trial {} / {}".format(counter, n_calls))
-        print(params)
-        print()
+        print('{}\n'.format(params))
 
         estimator = get_estimator(
             model_module,

@@ -21,7 +21,7 @@ def _print_error(message, func_name):
     return
 
 
-def create_simple_ds(data_dir, mode):
+def create_simple_ds(data_dir, mode, no_healthy=False):
     '''
     this func will create simplest dataset
     which doesnt contain data augmentation or
@@ -32,9 +32,9 @@ def create_simple_ds(data_dir, mode):
     if mode == "classification":
         dataset = create_simple_ds_for_classification(data_dir)
     elif mode == "annotation":
-        dataset = create_simple_ds_for_annotation(data_dir)
+        dataset = create_simple_ds_for_annotation(data_dir, no_healthy=no_healthy)
     elif mode == "both":
-        dataset = create_simple_ds_for_both(data_dir)
+        dataset = create_simple_ds_for_both(data_dir, no_healthy=no_healthy)
     else:
         _print_error(mode_error_msg, sys._getframe().f_code.co_name)
         raise RuntimeError
@@ -47,10 +47,22 @@ def filter_out_healthy(dataset):
     given dataset.
     this func assumes that dataset has key 'group'
     and 'group = 0' indicates healthy
+
+    DEPRECATED
+    use no_healthy=True in create_simple_ds_for_annotation
+    instead.
     '''
+    print('WARNING: filter_out_healthy is now deprecated')
     dataset = dataset.filter(
         lambda dictionary: tf.not_equal(dictionary['group'], 0)
     )
+    dataset = decrement_group(dataset)
+    return dataset
+
+def decrement_group(dataset):
+    '''
+    this function will decrement group num in dataset
+    '''
     dataset = dataset.map(
         lambda dictionary: lambda_for_dict(
             ('group', 'group', lambda x: x - 1),
@@ -135,15 +147,13 @@ def input_func_train(data_dir, mode, no_healthy=False):
     Returns:
         tf.Dataset = tuple(featuers<dict>, label)
     """
-    dataset = create_simple_ds(data_dir, mode)
+    dataset = create_simple_ds(data_dir, mode, no_healthy=no_healthy)
     dataset = determine_channel_size_on_mode(dataset, mode)
-    dataset = augment_ds(dataset)
+    dataset = augment_ds(dataset, mode)
     dataset = normalize(dataset)
     if mode == "annotation" or mode == 'both':
         dataset = divide_channels(dataset)
         # 'image' in dict will be divided into 'raw' 'annotation'
-    if no_healthy:
-        dataset = filter_out_healthy(dataset)
 
     dataset = separate_feature_label(dataset, mode)
     dataset = dataset.shuffle(FLAGS.shuffle_buffer_size)
@@ -152,6 +162,23 @@ def input_func_train(data_dir, mode, no_healthy=False):
     dataset = dataset.repeat(None)
     return dataset
 
+def modify(dataset, target_key, modify_rule_dict):
+    '''
+    this function will modify data with key 'target_key' in dataset
+    regarding to dictionary 'modify_rule_dict'.
+    modify_rule_dict is supposed to have keys,
+    which represents domain and value represents codomain.
+    note that modify_rule_dict must have all the values
+    that is contained in values in key='target_key' in dataset
+    as keys.
+    '''
+    dataset = dataset.map(
+        lambda dictionary: lambda_for_dict(
+            (target_key, target_key, lambda old: modify_rule_dict[old]),
+            dictionary
+        )
+    )
+    return dataset
 
 def determine_channel_size(dataset, channel_size):
     '''
@@ -169,7 +196,7 @@ def determine_channel_size(dataset, channel_size):
                     image, channel_size)
             ), dictionary
         ),
-        FLAGS.cores,)
+    )
     return dataset
 
 
@@ -193,7 +220,6 @@ def divide_channels(dataset):
                 ['image', 'annotation', lambda raw_annotation: raw_annotation[:, :, 1:]],
             ),
             dictionary),
-        FLAGS.cores,
     )
     dataset = dataset.map(
         lambda dictionary: lambda_for_dict(
@@ -201,7 +227,6 @@ def divide_channels(dataset):
                 ['image', None, None],  # delete image
             ),
             dictionary),
-        FLAGS.cores,
     )
     return dataset
 
@@ -224,7 +249,7 @@ def normalize(dataset):
     return dataset
 
 
-def create_simple_ds_for_annotation(data_dir, label_value=(255, 0, 0)):
+def create_simple_ds_for_annotation(data_dir, label_value=(255, 0, 0), no_healthy=False):
     """
     this function creates simple ds for segmentation
 
@@ -233,8 +258,12 @@ def create_simple_ds_for_annotation(data_dir, label_value=(255, 0, 0)):
     """
     data_dir = data_dir if data_dir[-1] == "/" else data_dir + "/"
 
-    dataset = tf.data.Dataset.list_files(
-        file_pattern=data_dir + "annotation/*/*/*", shuffle=True)
+    if no_healthy:
+        pattern = data_dir + "annotation/cancer_annotations/*/*"
+    else:
+        pattern = data_dir + "annotation/*/*/*"
+
+    dataset = tf.data.Dataset.list_files(file_pattern=pattern, shuffle=True)
     # we need to add '*/*/*' at the end of data_dir
     #  because we suppose directory structure like below.
     #   data/train/annotation/cancer_annotations/5468464/23.jpg
@@ -327,29 +356,33 @@ def query_group(patient_id, data_dir='./data'):
         if not isinstance(patient_id, str):
             patient_id = str(patient_id)
 
-        if patient_id in os.listdir('{}/RAW/healthy_cases'.format(data_dir)):
-            return 0
         for group in os.listdir(group_dir):
             if patient_id in os.listdir('{}/{}'.format(group_dir, group)):
                 group_int = int(regex.sub(r'.*(\d+).*', r'\1', group))
                 return group_int
+
+        if patient_id in os.listdir('{}/RAW/healthy_cases'.format(data_dir)):
+            return 0
         print('Error: failed to retrieve group for patient_id: {}'.format(patient_id))
         return -1
     return tf.py_func(__query, [patient_id, data_dir], tf.int64)
 
 
-def create_simple_ds_for_both(data_dir, label_value=(255, 0, 0)):
+def create_simple_ds_for_both(data_dir, label_value=(255, 0, 0), no_healthy=False, error_tolerant_mode=False):
     '''
     this function creates dataset that contatins
     (Raw MRI, Cancer Annotation, Cancer Stage Class)
     '''
-    dataset = create_simple_ds_for_annotation(data_dir, label_value)
+    dataset = create_simple_ds_for_annotation(data_dir, label_value, no_healthy=no_healthy)
     dataset = dataset.map(
         lambda dictionary: lambda_for_dict(
             ('patient_id', 'group', query_group), dictionary)
     )
-    dataset = dataset.filter(
-        lambda dictionary: tf.not_equal(dictionary['group'], -1))
+    if no_healthy:
+        dataset = decrement_group(dataset)
+    if error_tolerant_mode:
+        dataset = dataset.filter(
+            lambda dictionary: tf.not_equal(dictionary['group'], -1))
     return dataset
 
 
@@ -419,7 +452,6 @@ def create_simple_ds_for_classification(data_dir):
             'patient_id': patient_id,
             'img_id': img_id,
         },
-        FLAGS.cores,
     )
     dataset = dataset.map(
         lambda dictionary: lambda_for_dict((
@@ -511,7 +543,7 @@ def get_patient_img_from_path(path):
     return (path, patient_id, img_id)
 
 
-def augment_ds(ds):
+def augment_ds(ds, mode):
     """
     this function performs data augmentation
     to given dataset and returns dataset
@@ -555,7 +587,7 @@ def augment_ds(ds):
         )
         return image
 
-    def augment_warp(image, n_points=10, width_index=0, height_index=1, threshold=5, default=0.0):
+    def augment_warp(image, n_points=100, width_index=0, height_index=1, threshold=5, default=0.0):
         '''
         this function will perfom data augmentation
         using Non-affine transformation, namely
@@ -640,12 +672,18 @@ def augment_ds(ds):
             image = augment_func(image)
         return image
 
+    if mode == 'annotation':
+        op_list = [augment_dynamic, augment_static, augment_warp]
+    else:
+        op_list = [augment_dynamic, augment_static, ]
+    print('INFO: augmentation:{}'.format(op_list))
+
     ds = ds.map(
         lambda dictionary: lambda_for_dict(
             (
                 'image', 'image',
                 lambda image: fused_augmentation(
-                    image, [augment_dynamic, augment_static])
+                    image, op_list)
             ),
             dictionary
         ),
@@ -734,15 +772,13 @@ def input_func_test(data_dir, mode, no_healthy=False):
         tf.Dataset
             touple(dict, label)
     """
-    dataset = create_simple_ds(data_dir, mode)
+    dataset = create_simple_ds(data_dir, mode, no_healthy=no_healthy)
     dataset = determine_channel_size_on_mode(dataset, mode)
     dataset = resize_image(dataset)
     dataset = normalize(dataset)
     if mode == "annotation" or mode == 'both':
         dataset = divide_channels(dataset)
         # 'image' in dict will be divided into 'raw' 'annotation'
-    if no_healthy:
-        dataset = filter_out_healthy(dataset)
 
     dataset = separate_feature_label(dataset, mode)
     dataset = dataset.batch(FLAGS.batch_size)
@@ -778,7 +814,6 @@ def generator_from_dataset(ds, sess):
     try:
         while True:
             yield sess.run(next_row)
-
     except tf.errors.OutOfRangeError:
         pass
 
@@ -795,30 +830,32 @@ def generate_tf_record(path, ds, parse_fn=None):
     """
 
     def _int64_feature(value):
-        return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
+        return tf.train.Feature(
+            int64_list=tf.train.Int64List(value=make_sure_iterable(value)))
 
-    def _int64_feature_list(values):
-        return tf.train.Feature(int64_list=tf.train.Int64List(value=values))
-
-    def _bytes_feature_list(values):
-        return tf.train.Feature(bytes_list=tf.train.BytesList(value=values))
+    def _bytes_feature(value):
+        return tf.train.Feature(
+            bytes_list=tf.train.BytesList(value=make_sure_iterable(value)))
 
     def _float_feature(value):
-        return tf.train.Feature(float_list=tf.train.FloatList(value=[value]))
+        return tf.train.Feature(
+            float_list=tf.train.FloatList(value=make_sure_iterable(value)))
 
-    def _float_feature_list(values):
-        return tf.train.Feature(float_list=tf.train.FloatList(value=values))
+    def make_sure_iterable(value):
+        if util.is_iterable(value):
+            return value
+        else:
+            return [value]
 
     def row_to_example(row):
         """this function convert row to example"""
-        feature_dict = row[0]
-        label = row[1]
-
         return tf.train.Example(
             features=tf.train.Features(
                 feature={
-                    "word": _bytes_feature_list(feature_dict["word"]),
-                    "label": _int64_feature_list(label),
+                    "group": _int64_feature(row["group"]),
+                    "patient_id": _int64_feature(row['patient_id']),
+                    "image": _float_feature(row['image']),
+                    "img_id": _int64_feature(row['img_id']),
                 }
             )
         )
@@ -832,12 +869,10 @@ def generate_tf_record(path, ds, parse_fn=None):
     )
 
     counter = 0
-    with tf.Session(config=config_session) as sess, tf.python_io.TFRecordWriter(
-        path
-    ) as writer:
+    with tf.Session(config=config_session) as sess, tf.python_io.TFRecordWriter(path) as writer:
         for row in generator_from_dataset(ds, sess):
             counter += 1
-            print("[Sentence Analysys] NOW:" + str(counter))
+            print("[Creating TFRecord] NOW:" + str(counter))
             example = parse_fn(row)
             writer.write(example.SerializeToString())
 
@@ -845,7 +880,7 @@ def generate_tf_record(path, ds, parse_fn=None):
 class FLAGS:
     cores = multiprocessing.cpu_count()
     prefetch = None
-    batch_size = 30
+    batch_size = 180
     init_image_size = 512
     intermediate_image_size = 180
     final_image_size = intermediate_image_size
@@ -854,5 +889,4 @@ class FLAGS:
     gpus = len(util.get_available_gpus())
     if gpus != 0:
         batch_size = int(batch_size / gpus)
-        print('INFO: batch size per GPU is {}'.format(batch_size))
-        print()
+        print('INFO: batch size per GPU is {}\n'.format(batch_size))

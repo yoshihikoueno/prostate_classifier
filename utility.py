@@ -7,6 +7,18 @@ import tensorflow as tf
 from tensorflow.python.client import device_lib
 import os
 
+def is_iterable(subject):
+    '''
+    this func will check if given object
+    is iterable or not
+    '''
+    try:
+        it = iter(subject)
+    except TypeError:
+        return False
+    else:
+        return True
+
 def tf_threshold(input_tensor, threshold, max_val, dtype=tf.int64):
     '''
     this function will performs thresholding operation
@@ -117,8 +129,7 @@ def tf_exists(target_file_list):
         for target in targets:
             if not tf.gfile.Exists(target):
                 print('WARNING: {} does not exists'.format(target))
-                print('WARNING: list : {}'.format(targets))
-                print()
+                print('WARNING: list : {}\n'.format(targets))
                 return False
         return True
 

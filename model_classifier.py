@@ -20,7 +20,7 @@ default_params = {
     "kernel_size":3,
     "conv_stride":1,
     "unet_rate":2,
-    "cnn_filters_first":16,
+    "cnn_filters_first":2,
     "cnn_n_downsample":4,
     "cnn_rate":2,
     'cnn_kernel': 5,
@@ -36,6 +36,7 @@ def model_fn(features, labels, mode, params, config):
 
     seg = annotator(features['raw'], params["unet_filters_first"], params["unet_n_downsample"],
                     params["unet_rate"], params["kernel_size"], params["conv_stride"], False)
+    tf.train.init_from_checkpoint('summary/summary_annotator', {'annotator/': 'annotator/'})
 
     _, cnn_out = cnn(seg, params['cnn_filters_first'], params['cnn_n_downsample'],
                      params['cnn_rate'], params['kernel_size'], params['conv_stride'], True)
@@ -78,8 +79,10 @@ def model_fn(features, labels, mode, params, config):
     # Configure the Training Op (for TRAIN mode)
     if mode == tf.estimator.ModeKeys.TRAIN:
         optimizer = tf.train.AdamOptimizer()
-        train_op = optimizer.minimize(
-            loss=loss, global_step=tf.train.get_global_step())
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(update_ops):
+            train_op = optimizer.minimize(
+                loss=loss, global_step=tf.train.get_global_step())
         return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op, training_hooks=[])
 
     # Add evaluation metrics (for EVAL mode)
