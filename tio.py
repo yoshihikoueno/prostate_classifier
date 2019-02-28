@@ -359,6 +359,11 @@ def query_group(patient_id, data_dir='./data'):
         for group in os.listdir(group_dir):
             if patient_id in os.listdir('{}/{}'.format(group_dir, group)):
                 group_int = int(regex.sub(r'.*(\d+).*', r'\1', group))
+
+                ## ADDED
+                group_int = 1 if group_int <= 3 else 2
+                ## ADDED
+
                 return group_int
 
         if patient_id in os.listdir('{}/RAW/healthy_cases'.format(data_dir)):
@@ -368,11 +373,12 @@ def query_group(patient_id, data_dir='./data'):
     return tf.py_func(__query, [patient_id, data_dir], tf.int64)
 
 
-def create_simple_ds_for_both(data_dir, label_value=(255, 0, 0), no_healthy=False, error_tolerant_mode=False):
+def create_simple_ds_for_both(data_dir, label_value=None, no_healthy=False, error_tolerant_mode=False):
     '''
     this function creates dataset that contatins
     (Raw MRI, Cancer Annotation, Cancer Stage Class)
     '''
+    if label_value is None: label_value = util.label_value
     dataset = create_simple_ds_for_annotation(data_dir, label_value, no_healthy=no_healthy)
     dataset = dataset.map(
         lambda dictionary: lambda_for_dict(
@@ -674,6 +680,8 @@ def augment_ds(ds, mode):
 
     if mode == 'annotation':
         op_list = [augment_dynamic, augment_static, augment_warp]
+    elif mode == 'warp':
+        op_list = [augment_warp]
     else:
         op_list = [augment_dynamic, augment_static, ]
     print('INFO: augmentation:{}'.format(op_list))
@@ -884,7 +892,7 @@ class FLAGS:
     init_image_size = 512
     intermediate_image_size = 180
     final_image_size = intermediate_image_size
-    shuffle_buffer_size = 10 * batch_size
+    shuffle_buffer_size = 1 * batch_size
 
     gpus = len(util.get_available_gpus())
     if gpus != 0:

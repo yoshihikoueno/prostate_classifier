@@ -13,11 +13,14 @@ import tio
 import skopt
 import utility as util
 import logging
+import os
 logging.getLogger().setLevel(logging.INFO)
 
 train_dir = "data/train"
 eval_dir = "data/eval"
 model_dir = "summary"
+
+# Explicitly tell tensorflow to use all the GPU
 
 
 def get_estimator(model_module, model_dir=model_dir, save_interval=100, params=None, warm_start_setting=None):
